@@ -326,8 +326,7 @@
 
         function renderSection(id, title, departures, type) {
             const first = departures[0];
-            const rest = departures.slice(1);
-            const hasMore = rest.length > 0;
+            const hasMore = departures.length > 0;
 
             let timeDisplay = '--';
             let timeClass = '';
@@ -375,7 +374,7 @@
                     ${hasMore ? `
                         <div class="departure-list">
                             <div class="departure-list-inner">
-                                ${rest.map(dep => type === 'train' ? renderTrainCard(dep) : renderDepartureCard(dep)).join('')}
+                                ${departures.map(dep => type === 'train' ? renderTrainCard(dep) : renderDepartureCard(dep)).join('')}
                             </div>
                         </div>
                     ` : ''}
@@ -469,6 +468,49 @@
                 </div>
             `;
         }
+
+        // Pull-to-refresh voor mobiel
+        let touchStartY = 0;
+        let touchCurrentY = 0;
+        let isPulling = false;
+        const pullThreshold = 80;
+
+        document.addEventListener('touchstart', (e) => {
+            if (window.scrollY === 0) {
+                touchStartY = e.touches[0].clientY;
+                isPulling = true;
+            }
+        }, { passive: true });
+
+        document.addEventListener('touchmove', (e) => {
+            if (!isPulling) return;
+            touchCurrentY = e.touches[0].clientY;
+            const pullDistance = touchCurrentY - touchStartY;
+
+            if (pullDistance > 0 && window.scrollY === 0) {
+                const statusText = document.getElementById('statusText');
+                if (pullDistance > pullThreshold) {
+                    statusText.textContent = 'Laat los om te verversen';
+                } else {
+                    statusText.textContent = 'Trek omlaag om te verversen';
+                }
+            }
+        }, { passive: true });
+
+        document.addEventListener('touchend', () => {
+            if (!isPulling) return;
+            const pullDistance = touchCurrentY - touchStartY;
+
+            if (pullDistance > pullThreshold && window.scrollY === 0) {
+                const statusText = document.getElementById('statusText');
+                statusText.textContent = 'Verversen...';
+                loadDepartures();
+            }
+
+            isPulling = false;
+            touchStartY = 0;
+            touchCurrentY = 0;
+        }, { passive: true });
 
         // Initial load
         loadDepartures();
