@@ -50,9 +50,17 @@
     <script>
         // Theme toggle
         function initTheme() {
-            const savedTheme = localStorage.getItem('theme');
-            if (savedTheme) {
-                document.documentElement.setAttribute('data-theme', savedTheme);
+            try {
+                const savedTheme = localStorage.getItem('theme');
+                if (savedTheme) {
+                    document.documentElement.setAttribute('data-theme', savedTheme);
+                } else {
+                    // Set default theme explicitly
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                }
+            } catch (e) {
+                // localStorage not available, use dark as default
+                document.documentElement.setAttribute('data-theme', 'dark');
             }
         }
 
@@ -60,7 +68,11 @@
             const currentTheme = document.documentElement.getAttribute('data-theme');
             const newTheme = currentTheme === 'light' ? 'dark' : 'light';
             document.documentElement.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
+            try {
+                localStorage.setItem('theme', newTheme);
+            } catch (e) {
+                // localStorage not available, theme will reset on reload
+            }
         }
 
         // Initialize theme on load

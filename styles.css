@@ -416,14 +416,18 @@ footer a {
     background: none;
     border: none;
     color: var(--text-muted);
-    padding: 0.5rem;
-    margin-left: 0.5rem;
+    padding: 0.75rem;
+    margin-left: 0.25rem;
     cursor: pointer;
     border-radius: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: color 0.2s, background 0.2s;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    min-width: 44px;
+    min-height: 44px;
 }
 
 .refresh-btn:hover,
