@@ -44,26 +44,34 @@
             'https://api.allorigins.win/raw?url=',
             'https://corsproxy.io/?'
         ];
-        let currentProxyIndex = 0;
+        const FETCH_TIMEOUT = 5000; // 5 seconden timeout per proxy
         let refreshTimer;
 
-        // Fetch HTML van drgl.nl via CORS proxy
+        // Fetch HTML van drgl.nl via CORS proxy (parallel racing)
         async function fetchDrglData(url) {
-            for (let i = 0; i < CORS_PROXIES.length; i++) {
-                const proxyIndex = (currentProxyIndex + i) % CORS_PROXIES.length;
-                const proxyUrl = CORS_PROXIES[proxyIndex] + encodeURIComponent(url);
+            const fetchWithTimeout = async (proxyUrl) => {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
                 try {
-                    const response = await fetch(proxyUrl);
-                    if (response.ok) {
-                        currentProxyIndex = proxyIndex;
-                        return await response.text();
-                    }
+                    const response = await fetch(proxyUrl, { signal: controller.signal });
+                    clearTimeout(timeoutId);
+                    if (!response.ok) throw new Error('Response not ok');
+                    return response.text();
                 } catch (e) {
-                    console.log(`Proxy ${proxyIndex} failed, trying next...`);
+                    clearTimeout(timeoutId);
+                    throw e;
                 }
+            };
+
+            const proxyUrls = CORS_PROXIES.map(proxy => proxy + encodeURIComponent(url));
+
+            try {
+                // Race beide proxies parallel - de snelste wint
+                return await Promise.any(proxyUrls.map(fetchWithTimeout));
+            } catch (e) {
+                throw new Error('All proxies failed');
             }
-            throw new Error('All proxies failed');
         }
 
         // Parse HTML naar departure objecten
