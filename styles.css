@@ -20,6 +20,25 @@
     --border: #27272a;
 }
 
+[data-theme="light"] {
+    --bg-primary: #faf8fc;
+    --bg-secondary: #ffffff;
+    --bg-card: #f5f0f8;
+    --bg-card-hover: #efe8f4;
+    --text-primary: #2d2a33;
+    --text-secondary: #6b6574;
+    --text-muted: #9490a0;
+    --accent-bus: #7c9dec;
+    --accent-train: #f0c87a;
+    --success: #7ec9a4;
+    --warning: #e8b87a;
+    --danger: #e89b9b;
+    --border: #e8e0f0;
+    --train-badge-text: #5c4a2a;
+    --platform-bg: #a8b8d8;
+    --platform-text: #2d3a50;
+}
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
     background: var(--bg-primary);
@@ -222,7 +241,7 @@ h1 {
 
 .line-badge.train {
     background: var(--accent-train);
-    color: #1c1c1f;
+    color: var(--train-badge-text, #1c1c1f);
     font-size: 0.65rem;
 }
 
@@ -283,8 +302,8 @@ h1 {
 }
 
 .platform-badge {
-    background: #003082;
-    color: #ffc917;
+    background: var(--platform-bg, #003082);
+    color: var(--platform-text, #ffc917);
     padding: 0.1rem 0.35rem;
     border-radius: 4px;
     font-size: 0.65rem;
@@ -392,7 +411,8 @@ footer a {
     text-decoration: none;
 }
 
-.refresh-btn {
+.refresh-btn,
+.theme-toggle {
     background: none;
     border: none;
     color: var(--text-muted);
@@ -406,13 +426,28 @@ footer a {
     transition: color 0.2s, background 0.2s;
 }
 
-.refresh-btn:hover {
+.refresh-btn:hover,
+.theme-toggle:hover {
     color: var(--text-primary);
     background: var(--bg-card);
 }
 
-.refresh-btn:active {
+.refresh-btn:active,
+.theme-toggle:active {
     background: var(--bg-card-hover);
+}
+
+/* Theme toggle icons */
+.theme-icon-moon {
+    display: none;
+}
+
+[data-theme="light"] .theme-icon-sun {
+    display: none;
+}
+
+[data-theme="light"] .theme-icon-moon {
+    display: block;
 }
 
 @media (max-width: 400px) {
