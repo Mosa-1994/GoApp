@@ -15,6 +15,12 @@
         <div class="status-bar">
             <div class="status-dot" id="statusDot"></div>
             <span id="statusText">Verbonden</span>
+            <button class="refresh-btn" onclick="handleRefreshClick()" aria-label="Ververs">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 4v6h-6M1 20v-6h6"/>
+                    <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                </svg>
+            </button>
         </div>
 
         <div id="content">
@@ -469,48 +475,12 @@
             `;
         }
 
-        // Pull-to-refresh voor mobiel
-        let touchStartY = 0;
-        let touchCurrentY = 0;
-        let isPulling = false;
-        const pullThreshold = 80;
-
-        document.addEventListener('touchstart', (e) => {
-            if (window.scrollY === 0) {
-                touchStartY = e.touches[0].clientY;
-                isPulling = true;
-            }
-        }, { passive: true });
-
-        document.addEventListener('touchmove', (e) => {
-            if (!isPulling) return;
-            touchCurrentY = e.touches[0].clientY;
-            const pullDistance = touchCurrentY - touchStartY;
-
-            if (pullDistance > 0 && window.scrollY === 0) {
-                const statusText = document.getElementById('statusText');
-                if (pullDistance > pullThreshold) {
-                    statusText.textContent = 'Laat los om te verversen';
-                } else {
-                    statusText.textContent = 'Trek omlaag om te verversen';
-                }
-            }
-        }, { passive: true });
-
-        document.addEventListener('touchend', () => {
-            if (!isPulling) return;
-            const pullDistance = touchCurrentY - touchStartY;
-
-            if (pullDistance > pullThreshold && window.scrollY === 0) {
-                const statusText = document.getElementById('statusText');
-                statusText.textContent = 'Verversen...';
-                loadDepartures();
-            }
-
-            isPulling = false;
-            touchStartY = 0;
-            touchCurrentY = 0;
-        }, { passive: true });
+        // Refresh knop handler
+        function handleRefreshClick() {
+            const statusText = document.getElementById('statusText');
+            statusText.textContent = 'Verversen...';
+            loadDepartures();
+        }
 
         // Initial load
         loadDepartures();

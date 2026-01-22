@@ -392,6 +392,29 @@ footer a {
     text-decoration: none;
 }
 
+.refresh-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 0.5rem;
+    margin-left: 0.5rem;
+    cursor: pointer;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s, background 0.2s;
+}
+
+.refresh-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+.refresh-btn:active {
+    background: var(--bg-card-hover);
+}
+
 @media (max-width: 400px) {
     .header-time-value {
         font-size: 1.75rem;
