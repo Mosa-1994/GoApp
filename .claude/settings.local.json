@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:openov.nl)",
+      "WebFetch(domain:ndovloket.nl)",
+      "WebFetch(domain:gtfs.ovapi.nl)",
+      "WebFetch(domain:data.ndovloket.nl)",
+      "WebFetch(domain:v0.ovapi.nl)",
+      "WebFetch(domain:drgl.nl)"
+    ]
+  }
+}
