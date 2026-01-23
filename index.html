@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OV Tijden De Meern & Vleuten</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
     <link rel="apple-touch-icon" href="assets/goapp-icoon.png">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -48,6 +49,21 @@
         </footer>
     </div>
 
+        <div class="map-modal" id="mapModal" aria-hidden="true">
+        <div class="map-sheet" role="dialog" aria-modal="true" aria-label="Live positie">
+            <div class="map-header">
+                <div class="map-title">
+                    Live positie
+                    <span class="map-badge" id="mapStopsBadge" hidden></span>
+                </div>
+                <button class="map-close" onclick="closeMapModal()" aria-label="Sluit kaart">✕</button>
+            </div>
+            <div id="liveMap" class="map-canvas"></div>
+            <div id="mapMeta" class="map-meta">Laden...</div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script>
         // Theme toggle
         function updateThemeColor(theme) {
@@ -94,12 +110,17 @@
         // Bus halte
         const BUS_STOP_AREA = 'NL:S:51200123';
         const BUS_URL = `https://drgl.nl/stop/${BUS_STOP_AREA}/departurespanel`;
+        const BUS_STOP_COORDS = {
+            'NL:S:51200123': { lat: 52.0839993, lon: 5.0132954 }
+        };
 
         // Trein station Vleuten
         const TRAIN_STOP_AREA = 'NL:S:vtn';
         const TRAIN_URL = `https://drgl.nl/stop/${TRAIN_STOP_AREA}/traindeparturespanel`;
 
         const REFRESH_INTERVAL = 15000;
+        const POSITION_CACHE_TTL = 30000;
+        const JOURNEY_CACHE_TTL = 30000;
 
         const CORS_PROXIES = [
             'https://api.allorigins.win/raw?url=',
@@ -107,6 +128,20 @@
         ];
         const FETCH_TIMEOUT = 5000; // 5 seconden timeout per proxy
         let refreshTimer;
+        const positionCache = new Map();
+        const journeyStopsCache = new Map();
+        const journeyProgressCache = new Map();
+        let liveMap;
+        let liveMarker;
+        let liveMapTimer;
+        let liveJourneyPath;
+        let liveJourneyLabel;
+        let liveJourneyRealtime = false;
+        let liveRouteCoords;
+        let liveRouteLine;
+        let liveRemainingLine;
+        let liveStopMarker;
+        let liveMarkerIcon;
 
         // Fetch HTML van drgl.nl via CORS proxy (parallel racing)
         async function fetchDrglData(url) {
@@ -135,6 +170,109 @@
             }
         }
 
+        async function fetchDrglJson(url) {
+            const fetchWithTimeout = async (proxyUrl) => {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+
+                try {
+                    const response = await fetch(proxyUrl, { signal: controller.signal });
+                    clearTimeout(timeoutId);
+                    if (!response.ok) throw new Error('Response not ok');
+                    return response.json();
+                } catch (e) {
+                    clearTimeout(timeoutId);
+                    throw e;
+                }
+            };
+
+            const proxyUrls = CORS_PROXIES.map(proxy => proxy + encodeURIComponent(url));
+
+            try {
+                return await Promise.any(proxyUrls.map(fetchWithTimeout));
+            } catch (e) {
+                throw new Error('All proxies failed');
+            }
+        }
+
+        function normalizeStopName(name) {
+            return (name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        }
+
+        async function fetchJourneyStops(journeyPath) {
+            const cached = journeyStopsCache.get(journeyPath);
+            const now = Date.now();
+            if (cached && now - cached.checkedAt < JOURNEY_CACHE_TTL) return cached.stops;
+
+            const journeyUrl = `https://drgl.nl${journeyPath}`;
+            const html = await fetchDrglData(journeyUrl);
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const stops = [];
+
+            doc.querySelectorAll('#ott-main-journeycalls .list-group-item').forEach(item => {
+                const href = item.getAttribute('href') || '';
+                const stopMatch = href.match(/\/stop\/([^/?#]+)/);
+                const nameEl = item.querySelector('.row.col-md-8.col-xs-8') || item.querySelector('.row.col-md-8');
+                const name = nameEl ? nameEl.textContent.trim() : item.textContent.trim();
+
+                if (stopMatch) {
+                    stops.push({
+                        stopId: stopMatch[1],
+                        name
+                    });
+                }
+            });
+
+            journeyStopsCache.set(journeyPath, { stops, checkedAt: now });
+            return stops;
+        }
+
+        async function fetchJourneyProgress(journeyPath) {
+            const cached = journeyProgressCache.get(journeyPath);
+            const now = Date.now();
+            if (cached && now - cached.checkedAt < JOURNEY_CACHE_TTL) return cached.text;
+
+            const progressUrl = `https://drgl.nl${journeyPath.replace(/\/$/, '')}/progress`;
+            const html = await fetchDrglData(progressUrl);
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const text = doc.querySelector('.ott-btm-vjprogress')?.textContent?.trim() || '';
+
+            journeyProgressCache.set(journeyPath, { text, checkedAt: now });
+            return text;
+        }
+
+        async function getRemainingStopsCount(journeyPath, targetStopId) {
+            if (!journeyPath || !targetStopId) return null;
+
+            const [stops, progressText] = await Promise.all([
+                fetchJourneyStops(journeyPath),
+                fetchJourneyProgress(journeyPath)
+            ]);
+
+            if (!stops.length) return null;
+
+            const targetIndex = stops.findIndex(stop => stop.stopId === targetStopId);
+            if (targetIndex < 0) return null;
+
+            const match = progressText.match(/tussen\s+(.+)\s+en\s+(.+)/i);
+            const nextStopName = match ? normalizeStopName(match[2]) : '';
+            if (!nextStopName) return null;
+
+            const nextIndex = stops.findIndex(stop => {
+                const stopName = normalizeStopName(stop.name);
+                return stopName === nextStopName ||
+                    stopName.includes(nextStopName) ||
+                    nextStopName.includes(stopName);
+            });
+
+            if (nextIndex < 0) return null;
+            if (targetIndex < nextIndex) return 0;
+
+            return targetIndex - nextIndex + 1;
+        }
+
         // Parse HTML naar departure objecten
         function parseDrglHtml(html) {
             const parser = new DOMParser();
@@ -144,6 +282,9 @@
 
             doc.querySelectorAll('.list-group-item').forEach(row => {
                 try {
+                    const journeyPath = row.getAttribute('href') || '';
+                    if (journeyPath && !journeyPath.startsWith('/journey/')) return;
+
                     // Tijd ophalen (bevat ook eventuele vertraging zoals "21:10 +11")
                     const timeEl = row.querySelector('.ott-departure-time');
                     const timeText = timeEl?.textContent?.trim() || '';
@@ -198,7 +339,8 @@
                         delayMinutes,
                         isRealtime,
                         cancelled: isCancelled,
-                        direction: getDirectionFromDestination(destination)
+                        direction: getDirectionFromDestination(destination),
+                        journeyPath
                     });
                 } catch (e) {
                     console.warn('Failed to parse row:', e);
@@ -383,6 +525,22 @@
                     section.classList.toggle('expanded');
                 });
             });
+
+            // Live positie badges en kaart-interactie
+            const busDepartures = [...utrechtDepartures, ...vleutenDepartures];
+            updateLiveIndicators(busDepartures);
+
+            document.querySelectorAll('.departure-card[data-journey]').forEach(card => {
+                card.addEventListener('click', () => {
+                    if (card.dataset.live !== 'true') return;
+                    openLiveMap(
+                        card.dataset.journey,
+                        card.dataset.line,
+                        card.dataset.destination,
+                        card.dataset.realtime === 'true'
+                    );
+                });
+            });
         }
 
         function renderSection(id, title, departures, type) {
@@ -472,12 +630,17 @@
                 timeDisplay = departure.minutes.toString();
             }
 
+            const journeyAttr = departure.journeyPath
+                ? `data-journey="${departure.journeyPath}" data-live="false" data-realtime="${departure.isRealtime ? 'true' : 'false'}"`
+                : '';
+
             return `
-                <div class="departure-card ${departure.cancelled ? 'cancelled' : ''}">
+                <div class="departure-card ${departure.cancelled ? 'cancelled' : ''}" ${journeyAttr} data-line="${departure.line}" data-destination="${departure.destination}">
                     <div class="line-badge">${departure.line}</div>
                     <div class="departure-info">
                         <div class="destination">${departure.destination}</div>
                         <div class="status-indicator">
+                            ${departure.journeyPath ? '<span class="live-indicator" hidden>Live</span>' : ''}
                             <span class="status-dot-small ${statusInfo.class}"></span>
                             <span class="status-label ${statusInfo.class}">${statusInfo.label}</span>
                         </div>
@@ -530,6 +693,326 @@
             `;
         }
 
+        function buildPositionUrl(journeyPath) {
+            if (!journeyPath) return '';
+            const basePath = journeyPath.endsWith('/') ? journeyPath.slice(0, -1) : journeyPath;
+            return `https://drgl.nl${basePath}/position`;
+        }
+
+        function buildPolylineUrl(journeyPath) {
+            if (!journeyPath) return '';
+            const basePath = journeyPath.endsWith('/') ? journeyPath.slice(0, -1) : journeyPath;
+            return `https://drgl.nl${basePath}/polyline`;
+        }
+
+        function decodePolyline(encoded) {
+            let index = 0;
+            let lat = 0;
+            let lon = 0;
+            const coords = [];
+
+            while (index < encoded.length) {
+                let result = 0;
+                let shift = 0;
+                let byte;
+
+                do {
+                    byte = encoded.charCodeAt(index++) - 63;
+                    result |= (byte & 0x1f) << shift;
+                    shift += 5;
+                } while (byte >= 0x20);
+
+                const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
+                lat += deltaLat;
+
+                result = 0;
+                shift = 0;
+                do {
+                    byte = encoded.charCodeAt(index++) - 63;
+                    result |= (byte & 0x1f) << shift;
+                    shift += 5;
+                } while (byte >= 0x20);
+
+                const deltaLon = (result & 1) ? ~(result >> 1) : (result >> 1);
+                lon += deltaLon;
+
+                coords.push([lat / 1e5, lon / 1e5]);
+            }
+
+            return coords;
+        }
+
+        function findClosestIndex(coords, target) {
+            let bestIndex = 0;
+            let bestDist = Infinity;
+            const [tLat, tLon] = target;
+
+            coords.forEach(([lat, lon], index) => {
+                const dLat = lat - tLat;
+                const dLon = lon - tLon;
+                const dist = dLat * dLat + dLon * dLon;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestIndex = index;
+                }
+            });
+
+            return bestIndex;
+        }
+
+        function clearRouteLayers() {
+            if (liveRouteLine) {
+                liveRouteLine.remove();
+                liveRouteLine = null;
+            }
+            if (liveRemainingLine) {
+                liveRemainingLine.remove();
+                liveRemainingLine = null;
+            }
+            if (liveStopMarker) {
+                liveStopMarker.remove();
+                liveStopMarker = null;
+            }
+            liveRouteCoords = null;
+        }
+
+        async function loadJourneyRoute() {
+            if (!liveJourneyPath) return;
+            const polylineUrl = buildPolylineUrl(liveJourneyPath);
+            if (!polylineUrl) return;
+
+            try {
+                const data = await fetchDrglJson(polylineUrl);
+                const polylines = Array.isArray(data?.polyLines) ? data.polyLines : [];
+                if (!polylines.length) return;
+
+                const coords = polylines.flatMap(line => decodePolyline(line));
+                if (!coords.length) return;
+
+                liveRouteCoords = coords;
+
+                if (liveRouteLine) {
+                    liveRouteLine.setLatLngs(coords);
+                } else {
+                    liveRouteLine = L.polyline(coords, {
+                        color: '#94a3b8',
+                        weight: 4,
+                        opacity: 0.6
+                    }).addTo(liveMap);
+                }
+
+                const stopCoords = BUS_STOP_COORDS[BUS_STOP_AREA];
+                if (stopCoords) {
+                    const stopLatLng = [stopCoords.lat, stopCoords.lon];
+                    if (liveStopMarker) {
+                        liveStopMarker.setLatLng(stopLatLng);
+                    } else {
+                        liveStopMarker = L.circleMarker(stopLatLng, {
+                            radius: 6,
+                            color: '#1d4ed8',
+                            fillColor: '#3b82f6',
+                            fillOpacity: 0.9
+                        }).addTo(liveMap);
+                    }
+                }
+            } catch (e) {
+                // ignore route errors
+            }
+        }
+
+        async function fetchLivePositionStatus(journeyPath) {
+            const cached = positionCache.get(journeyPath);
+            const now = Date.now();
+            if (cached && now - cached.checkedAt < POSITION_CACHE_TTL) return cached;
+
+            const positionUrl = buildPositionUrl(journeyPath);
+            if (!positionUrl) throw new Error('Missing journey path');
+
+            const data = await fetchDrglJson(positionUrl);
+            const hasPosition = Array.isArray(data?.features) && data.features.length > 0;
+            const result = { hasPosition, checkedAt: now };
+            positionCache.set(journeyPath, result);
+            return result;
+        }
+
+        function updateLiveIndicators(departures) {
+            const tasks = departures
+                .filter(dep => dep.journeyPath)
+                .slice(0, 10)
+                .map(async dep => {
+                    try {
+                        const status = await fetchLivePositionStatus(dep.journeyPath);
+                        if (!status.hasPosition) return;
+                        const card = document.querySelector(`.departure-card[data-journey="${CSS.escape(dep.journeyPath)}"]`);
+                        if (!card) return;
+                        card.dataset.live = 'true';
+                        card.classList.add('live-available');
+                        const badge = card.querySelector('.live-indicator');
+                        if (badge) badge.hidden = false;
+                    } catch (e) {
+                        // ignore per-departure errors
+                    }
+                });
+
+            Promise.allSettled(tasks);
+        }
+
+        function ensureMap() {
+            if (liveMap) return;
+            liveMap = L.map('liveMap', { zoomControl: true });
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+            }).addTo(liveMap);
+        }
+
+        function startLiveMapTimer() {
+            clearInterval(liveMapTimer);
+            liveMapTimer = setInterval(refreshLiveMap, 10000);
+        }
+
+        async function openLiveMap(journeyPath, line, destination, isRealtime) {
+            const modal = document.getElementById('mapModal');
+            const meta = document.getElementById('mapMeta');
+            modal.classList.add('visible');
+            modal.setAttribute('aria-hidden', 'false');
+            meta.textContent = 'Laden...';
+            const isNewJourney = liveJourneyPath && liveJourneyPath !== journeyPath;
+            if (isNewJourney) {
+                clearRouteLayers();
+            }
+            liveJourneyPath = journeyPath;
+            liveJourneyLabel = `${line} naar ${destination}`;
+            liveJourneyRealtime = Boolean(isRealtime);
+
+            ensureMap();
+            setTimeout(() => liveMap.invalidateSize(), 100);
+
+            await loadJourneyRoute();
+            await refreshLiveMap();
+            startLiveMapTimer();
+        }
+
+        function closeMapModal() {
+            const modal = document.getElementById('mapModal');
+            modal.classList.remove('visible');
+            modal.setAttribute('aria-hidden', 'true');
+            clearInterval(liveMapTimer);
+            liveMapTimer = null;
+            liveJourneyPath = null;
+            liveJourneyLabel = null;
+            liveJourneyRealtime = false;
+            const badge = document.getElementById('mapStopsBadge');
+            if (badge) {
+                badge.hidden = true;
+                badge.textContent = '';
+            }
+            clearRouteLayers();
+        }
+
+        function updateRemainingRoute(currentLat, currentLon) {
+            if (!liveRouteCoords || !liveRouteCoords.length) return false;
+
+            const currentIndex = findClosestIndex(liveRouteCoords, [currentLat, currentLon]);
+            let remainingCoords = liveRouteCoords.slice(currentIndex);
+            let stopPassed = false;
+
+            const stopCoords = BUS_STOP_COORDS[BUS_STOP_AREA];
+            if (stopCoords) {
+                const stopIndex = findClosestIndex(liveRouteCoords, [stopCoords.lat, stopCoords.lon]);
+                if (stopIndex >= currentIndex) {
+                    remainingCoords = liveRouteCoords.slice(currentIndex, stopIndex + 1);
+                } else {
+                    stopPassed = true;
+                }
+            }
+
+            if (liveRemainingLine) {
+                liveRemainingLine.setLatLngs(remainingCoords);
+            } else {
+                liveRemainingLine = L.polyline(remainingCoords, {
+                    color: '#3b82f6',
+                    weight: 5,
+                    opacity: 0.9
+                }).addTo(liveMap);
+            }
+
+            return stopPassed;
+        }
+
+        async function refreshLiveMap() {
+            const meta = document.getElementById('mapMeta');
+            const badge = document.getElementById('mapStopsBadge');
+            const mapSheet = document.querySelector('.map-sheet');
+            if (!liveJourneyPath) return;
+            try {
+                const positionUrl = buildPositionUrl(liveJourneyPath);
+                const data = await fetchDrglJson(positionUrl);
+                const feature = data?.features?.[0];
+                const coords = feature?.geometry?.coordinates;
+                liveJourneyRealtime = Boolean(feature);
+                if (mapSheet) {
+                    mapSheet.classList.toggle('realtime-off', !liveJourneyRealtime);
+                }
+                if (!Array.isArray(coords) || coords.length < 2) {
+                    meta.textContent = 'Geen live positie beschikbaar.';
+                    if (badge && badge.textContent) {
+                        badge.hidden = false;
+                    }
+                    return;
+                }
+                const [lon, lat] = coords;
+                if (liveMarker) {
+                    liveMarker.setLatLng([lat, lon]);
+                } else {
+                    if (!liveMarkerIcon) {
+                        liveMarkerIcon = L.divIcon({
+                            className: 'live-marker',
+                            html: '<span class="live-marker-core"></span>',
+                            iconSize: [22, 22],
+                            iconAnchor: [11, 11]
+                        });
+                    }
+                    liveMarker = L.marker([lat, lon], { icon: liveMarkerIcon }).addTo(liveMap);
+                }
+                liveMap.setView([lat, lon], 15);
+                const stopPassed = updateRemainingRoute(lat, lon);
+                let remainingStops = null;
+                if (liveJourneyRealtime) {
+                    try {
+                        remainingStops = await getRemainingStopsCount(liveJourneyPath, BUS_STOP_AREA);
+                    } catch (e) {
+                        remainingStops = null;
+                    }
+                }
+                const timeStr = new Date().toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+                if (stopPassed && liveJourneyRealtime) {
+                    meta.textContent = `${liveJourneyLabel} · halte al gepasseerd · bijgewerkt ${timeStr}`;
+                    if (badge) {
+                        badge.hidden = false;
+                        badge.textContent = 'Halte gepasseerd';
+                    }
+                } else if (remainingStops !== null && liveJourneyRealtime) {
+                    const stopLabel = remainingStops === 0 ? 'Laatste halte' : `Nog ${remainingStops} haltes`;
+                    meta.textContent = `${liveJourneyLabel} · ${stopLabel} · bijgewerkt ${timeStr}`;
+                    if (badge) {
+                        badge.hidden = false;
+                        badge.textContent = stopLabel;
+                    }
+                } else {
+                    meta.textContent = `${liveJourneyLabel} · bijgewerkt ${timeStr}`;
+                    if (badge) {
+                        badge.hidden = false;
+                    }
+                }
+            } catch (e) {
+                meta.textContent = 'Kon live positie niet laden.';
+                if (badge && badge.textContent) {
+                    badge.hidden = false;
+                }
+            }
+        }
+
         // Refresh knop handler
         function handleRefreshClick() {
             const statusText = document.getElementById('statusText');
@@ -555,9 +1038,14 @@
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
                 clearInterval(refreshTimer);
+                clearInterval(liveMapTimer);
             } else {
                 loadDepartures();
                 refreshTimer = setInterval(loadDepartures, REFRESH_INTERVAL);
+                if (liveJourneyPath && document.getElementById('mapModal')?.classList.contains('visible')) {
+                    refreshLiveMap();
+                    startLiveMapTimer();
+                }
             }
         });
     </script>
