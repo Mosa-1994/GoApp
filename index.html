@@ -8,6 +8,7 @@
     <link rel="apple-touch-icon" href="assets/goapp-icoon.png">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="theme-color" content="#0a0a0b">
 </head>
 <body>
     <div class="container">
@@ -49,18 +50,29 @@
 
     <script>
         // Theme toggle
+        function updateThemeColor(theme) {
+            const themeColor = theme === 'light' ? '#f1f5f9' : '#0a0a0b';
+            const metaTheme = document.querySelector('meta[name="theme-color"]');
+            if (metaTheme) {
+                metaTheme.setAttribute('content', themeColor);
+            }
+        }
+
         function initTheme() {
             try {
                 const savedTheme = localStorage.getItem('theme');
                 if (savedTheme) {
                     document.documentElement.setAttribute('data-theme', savedTheme);
+                    updateThemeColor(savedTheme);
                 } else {
                     // Set default theme explicitly
                     document.documentElement.setAttribute('data-theme', 'dark');
+                    updateThemeColor('dark');
                 }
             } catch (e) {
                 // localStorage not available, use dark as default
                 document.documentElement.setAttribute('data-theme', 'dark');
+                updateThemeColor('dark');
             }
         }
 
@@ -68,6 +80,7 @@
             const currentTheme = document.documentElement.getAttribute('data-theme');
             const newTheme = currentTheme === 'light' ? 'dark' : 'light';
             document.documentElement.setAttribute('data-theme', newTheme);
+            updateThemeColor(newTheme);
             try {
                 localStorage.setItem('theme', newTheme);
             } catch (e) {
