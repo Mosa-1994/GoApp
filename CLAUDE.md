@@ -4,15 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OV Tijden is a real-time public transport departure display for De Meern (bus) and Station Vleuten (train) in the Netherlands. It's a single-file static web application with no build process or dependencies.
+Halte is a real-time public transport departure display for De Meern (bus) and Station Vleuten (train) in the Netherlands. It's a static web application with no build process or dependencies.
 
 ## Development
 
 **No build/test/lint commands** - This is a zero-dependency static HTML application.
 
-To run locally: Open `GoApp/index.html` directly in a browser or serve with any static file server.
+To run locally: Open `index.html` directly in a browser or serve with any static file server.
 
-All modifications are made directly to `GoApp/index.html` which contains HTML, CSS, and JavaScript in a single file.
+## File Structure
+
+- `index.html` - Main HTML structure and JavaScript
+- `styles.css` - All CSS styling
+- `assets/` - App icons
 
 ## Architecture
 
