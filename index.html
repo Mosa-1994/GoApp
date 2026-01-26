@@ -325,7 +325,60 @@
             }).join('');
         }
 
-        // Search stops via drgl.nl
+        // Popular NS stations for quick selection
+        const POPULAR_STATIONS = [
+            { id: 'NL:S:ut', name: 'Utrecht Centraal', type: 'train' },
+            { id: 'NL:S:asd', name: 'Amsterdam Centraal', type: 'train' },
+            { id: 'NL:S:rtd', name: 'Rotterdam Centraal', type: 'train' },
+            { id: 'NL:S:ehv', name: 'Eindhoven', type: 'train' },
+            { id: 'NL:S:ah', name: 'Arnhem Centraal', type: 'train' },
+            { id: 'NL:S:amf', name: 'Amersfoort Centraal', type: 'train' },
+            { id: 'NL:S:gvc', name: 'Den Haag Centraal', type: 'train' },
+            { id: 'NL:S:ledn', name: 'Leiden Centraal', type: 'train' },
+            { id: 'NL:S:zl', name: 'Zwolle', type: 'train' },
+            { id: 'NL:S:gd', name: 'Gouda', type: 'train' },
+            { id: 'NL:S:hvs', name: 'Hilversum', type: 'train' },
+            { id: 'NL:S:asdz', name: 'Amsterdam Zuid', type: 'train' },
+            { id: 'NL:S:shl', name: 'Schiphol Airport', type: 'train' },
+            { id: 'NL:S:utzl', name: 'Utrecht Zuilen', type: 'train' },
+            { id: 'NL:S:utlr', name: 'Utrecht Leidsche Rijn', type: 'train' },
+            { id: 'NL:S:vtn', name: 'Vleuten', type: 'train' },
+            { id: 'NL:S:drvn', name: 'Driebergen-Zeist', type: 'train' },
+            { id: 'NL:S:uto', name: 'Utrecht Overvecht', type: 'train' },
+            { id: 'NL:S:bhv', name: 'Bilthoven', type: 'train' },
+            { id: 'NL:S:htnc', name: 'Houten Castellum', type: 'train' },
+            { id: 'NL:S:htn', name: 'Houten', type: 'train' },
+            { id: 'NL:S:bnc', name: 'Bunnik', type: 'train' },
+            { id: 'NL:S:mrn', name: 'Maarssen', type: 'train' },
+            { id: 'NL:S:bsmz', name: 'Breukelen', type: 'train' },
+            { id: 'NL:S:wdn', name: 'Woerden', type: 'train' },
+            { id: 'NL:S:hm', name: 'Harmelen', type: 'train' },
+            { id: 'NL:S:dld', name: 'Delft', type: 'train' },
+            { id: 'NL:S:nm', name: 'Nijmegen', type: 'train' },
+            { id: 'NL:S:std', name: \"'s-Hertogenbosch\", type: 'train' },
+            { id: 'NL:S:tb', name: 'Tilburg', type: 'train' },
+            { id: 'NL:S:brd', name: 'Breda', type: 'train' },
+            { id: 'NL:S:dtc', name: 'Dordrecht', type: 'train' },
+            { id: 'NL:S:gn', name: 'Groningen', type: 'train' },
+            { id: 'NL:S:lw', name: 'Leeuwarden', type: 'train' },
+            { id: 'NL:S:es', name: 'Enschede', type: 'train' },
+            { id: 'NL:S:ht', name: 'Heerlen', type: 'train' },
+            { id: 'NL:S:mt', name: 'Maastricht', type: 'train' },
+            { id: 'NL:S:vl', name: 'Venlo', type: 'train' },
+            { id: 'NL:S:apd', name: 'Apeldoorn', type: 'train' },
+            { id: 'NL:S:dvd', name: 'Deventer', type: 'train' },
+            { id: 'NL:S:alm', name: 'Almere Centrum', type: 'train' },
+            { id: 'NL:S:amr', name: 'Amersfoort Schothorst', type: 'train' },
+            { id: 'NL:S:assp', name: 'Amsterdam Sloterdijk', type: 'train' },
+            { id: 'NL:S:ass', name: 'Amsterdam Science Park', type: 'train' },
+            { id: 'NL:S:asdm', name: 'Amsterdam Muiderpoort', type: 'train' },
+            { id: 'NL:S:ampo', name: 'Amsterdam Amstel', type: 'train' },
+            { id: 'NL:S:asb', name: 'Amsterdam Bijlmer ArenA', type: 'train' },
+            { id: 'NL:S:duiz', name: 'Duivendrecht', type: 'train' },
+            { id: 'NL:S:rai', name: 'Amsterdam RAI', type: 'train' },
+        ];
+
+        // Search stops - combines local station list with drgl.nl search
         async function searchStops(query) {
             if (!query || query.length < 2) {
                 document.getElementById('searchResults').innerHTML = '';
@@ -335,14 +388,23 @@
             const resultsContainer = document.getElementById('searchResults');
             resultsContainer.innerHTML = '<div class="search-loading">Zoeken...</div>';
 
+            const queryLower = query.toLowerCase();
+            const stops = [];
+
+            // First: search in popular stations (instant results)
+            POPULAR_STATIONS.forEach(station => {
+                if (station.name.toLowerCase().includes(queryLower)) {
+                    stops.push({ ...station, lat: null, lon: null });
+                }
+            });
+
+            // Then: try to search drgl.nl for bus stops
             try {
-                // drgl.nl search endpoint
                 const searchUrl = `https://drgl.nl/stops?q=${encodeURIComponent(query)}`;
                 const html = await fetchDrglData(searchUrl);
 
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(html, 'text/html');
-                const stops = [];
 
                 doc.querySelectorAll('.list-group-item').forEach(item => {
                     const href = item.getAttribute('href') || '';
@@ -350,10 +412,13 @@
                     if (!stopMatch) return;
 
                     const stopId = stopMatch[1];
+                    // Skip if already in results (from popular stations)
+                    if (stops.some(s => s.id === stopId)) return;
+
                     const nameEl = item.querySelector('.ott-stopname, .row');
                     const name = nameEl ? nameEl.textContent.trim() : item.textContent.trim().split('\n')[0];
 
-                    if (name && stopId) {
+                    if (name && stopId && name.length > 2) {
                         const isTrain = isTrainStation(stopId, name);
                         stops.push({
                             id: stopId,
@@ -364,12 +429,11 @@
                         });
                     }
                 });
-
-                renderSearchResults(stops.slice(0, 8));
             } catch (e) {
-                console.error('Search failed:', e);
-                resultsContainer.innerHTML = '<div class="search-loading">Zoeken mislukt</div>';
+                console.log('drgl.nl search failed, using local results only:', e.message);
             }
+
+            renderSearchResults(stops.slice(0, 10));
         }
 
         function renderSearchResults(stops) {
