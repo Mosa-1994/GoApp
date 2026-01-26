@@ -18,6 +18,12 @@
     <div class="container">
         <header>
             <h1>H<svg class="logo-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4L6 36h6l2-6h12l2 6h6L20 4z"/><path d="M12 26h16"/></svg>LTE</h1>
+            <button class="stop-selector-btn" onclick="openStopSelector()" aria-label="Halte wijzigen">
+                <span id="currentStopName">De Meern, Veldhuizen</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 9l6 6 6-6"/>
+                </svg>
+            </button>
         </header>
 
         <div class="status-bar">
@@ -50,6 +56,26 @@
         <footer>
             <a href="https://drgl.nl" target="_blank">drgl.nl</a>
         </footer>
+    </div>
+
+    <!-- Stop selector modal -->
+    <div class="stop-modal" id="stopModal" aria-hidden="true">
+        <div class="stop-sheet" role="dialog" aria-modal="true" aria-label="Halte kiezen">
+            <div class="stop-header">
+                <div class="stop-title">Halte kiezen</div>
+                <button class="stop-close" onclick="closeStopSelector()" aria-label="Sluiten">✕</button>
+            </div>
+            <div class="stop-search">
+                <input type="text" id="stopSearchInput" placeholder="Zoek halte of station..." autocomplete="off">
+                <div id="searchResults" class="search-results"></div>
+            </div>
+            <div class="favorites-section">
+                <div class="favorites-title">Favorieten</div>
+                <div id="favoritesList" class="favorites-list">
+                    <!-- Favorites will be rendered here -->
+                </div>
+            </div>
+        </div>
     </div>
 
         <div class="map-modal" id="mapModal" aria-hidden="true">
@@ -110,16 +136,316 @@
         // Initialize theme on load
         initTheme();
 
-        // Bus halte
-        const BUS_STOP_AREA = 'NL:S:51200123';
-        const BUS_URL = `https://drgl.nl/stop/${BUS_STOP_AREA}/departurespanel`;
+        // ===== FAVORITES SYSTEM =====
+        const FAVORITES_KEY = 'halte-favorites';
+        const SELECTED_STOP_KEY = 'halte-selected-stop';
+
+        // Default stops
+        const DEFAULT_STOPS = [
+            {
+                id: 'NL:S:51200123',
+                name: 'De Meern, Veldhuizen',
+                type: 'bus',
+                lat: 52.0839993,
+                lon: 5.0132954
+            },
+            {
+                id: 'NL:S:vtn',
+                name: 'Station Vleuten',
+                type: 'train',
+                lat: 52.1053,
+                lon: 5.0075
+            }
+        ];
+
+        // Current selected stop
+        let currentStop = null;
+        let searchTimeout = null;
+
+        function loadFavorites() {
+            try {
+                const stored = localStorage.getItem(FAVORITES_KEY);
+                if (stored) {
+                    return JSON.parse(stored);
+                }
+            } catch (e) {
+                console.warn('Could not load favorites:', e);
+            }
+            return [...DEFAULT_STOPS];
+        }
+
+        function saveFavorites(favorites) {
+            try {
+                localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
+            } catch (e) {
+                console.warn('Could not save favorites:', e);
+            }
+        }
+
+        function loadSelectedStop() {
+            try {
+                const stored = localStorage.getItem(SELECTED_STOP_KEY);
+                if (stored) {
+                    return JSON.parse(stored);
+                }
+            } catch (e) {
+                console.warn('Could not load selected stop:', e);
+            }
+            // Default to first favorite (bus stop)
+            const favorites = loadFavorites();
+            return favorites[0] || DEFAULT_STOPS[0];
+        }
+
+        function saveSelectedStop(stop) {
+            try {
+                localStorage.setItem(SELECTED_STOP_KEY, JSON.stringify(stop));
+            } catch (e) {
+                console.warn('Could not save selected stop:', e);
+            }
+        }
+
+        function initializeStops() {
+            currentStop = loadSelectedStop();
+            updateCurrentStopDisplay();
+        }
+
+        function updateCurrentStopDisplay() {
+            const nameEl = document.getElementById('currentStopName');
+            if (nameEl && currentStop) {
+                nameEl.textContent = currentStop.name;
+            }
+        }
+
+        function selectStop(stop) {
+            currentStop = stop;
+            saveSelectedStop(stop);
+            updateCurrentStopDisplay();
+            closeStopSelector();
+            loadDepartures();
+        }
+
+        function addFavorite(stop) {
+            const favorites = loadFavorites();
+            // Check if already exists
+            if (favorites.some(f => f.id === stop.id)) {
+                return false;
+            }
+            favorites.push(stop);
+            saveFavorites(favorites);
+            renderFavorites();
+            return true;
+        }
+
+        function removeFavorite(stopId) {
+            let favorites = loadFavorites();
+            favorites = favorites.filter(f => f.id !== stopId);
+            // Keep at least one favorite
+            if (favorites.length === 0) {
+                favorites = [DEFAULT_STOPS[0]];
+            }
+            saveFavorites(favorites);
+
+            // If removed stop was selected, switch to first favorite
+            if (currentStop && currentStop.id === stopId) {
+                selectStop(favorites[0]);
+            }
+            renderFavorites();
+        }
+
+        function openStopSelector() {
+            const modal = document.getElementById('stopModal');
+            modal.classList.add('visible');
+            renderFavorites();
+
+            // Focus search input
+            setTimeout(() => {
+                document.getElementById('stopSearchInput').focus();
+            }, 100);
+        }
+
+        function closeStopSelector() {
+            const modal = document.getElementById('stopModal');
+            modal.classList.remove('visible');
+            document.getElementById('stopSearchInput').value = '';
+            document.getElementById('searchResults').innerHTML = '';
+        }
+
+        function renderFavorites() {
+            const container = document.getElementById('favoritesList');
+            const favorites = loadFavorites();
+
+            if (favorites.length === 0) {
+                container.innerHTML = '<div class="favorites-empty">Nog geen favorieten toegevoegd</div>';
+                return;
+            }
+
+            const busIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="3" width="14" height="14" rx="2"/><path d="M5 8h14"/><path d="M8 8v5"/><path d="M16 8v5"/><path d="M7 17l-1.5 3"/><path d="M17 17l1.5 3"/><path d="M3 21h18"/></svg>';
+            const trainIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="3" width="12" height="14" rx="3"/><path d="M6 8h12"/><path d="M9 8v4"/><path d="M15 8v4"/><path d="M10 17l-2 4"/><path d="M14 17l2 4"/><path d="M3 21h18"/></svg>';
+
+            container.innerHTML = favorites.map(stop => {
+                const isActive = currentStop && currentStop.id === stop.id;
+                const isTrain = stop.type === 'train' || stop.id.includes(':S:') && stop.name.toLowerCase().includes('station');
+                const icon = isTrain ? trainIcon : busIcon;
+                const typeLabel = isTrain ? 'Station' : 'Bushalte';
+
+                return `
+                    <div class="favorite-item ${isActive ? 'active' : ''}" onclick="selectStop(${JSON.stringify(stop).replace(/"/g, '&quot;')})">
+                        <div class="favorite-icon ${isTrain ? 'train' : ''}">${icon}</div>
+                        <div class="favorite-info">
+                            <div class="favorite-name">${stop.name}</div>
+                            <div class="favorite-type">${typeLabel}</div>
+                        </div>
+                        <button class="favorite-delete" onclick="event.stopPropagation(); removeFavorite('${stop.id}')" aria-label="Verwijderen">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Search stops via drgl.nl
+        async function searchStops(query) {
+            if (!query || query.length < 2) {
+                document.getElementById('searchResults').innerHTML = '';
+                return;
+            }
+
+            const resultsContainer = document.getElementById('searchResults');
+            resultsContainer.innerHTML = '<div class="search-loading">Zoeken...</div>';
+
+            try {
+                // drgl.nl search endpoint
+                const searchUrl = `https://drgl.nl/stops?q=${encodeURIComponent(query)}`;
+                const html = await fetchDrglData(searchUrl);
+
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const stops = [];
+
+                doc.querySelectorAll('.list-group-item').forEach(item => {
+                    const href = item.getAttribute('href') || '';
+                    const stopMatch = href.match(/\/stop\/([^/?#]+)/);
+                    if (!stopMatch) return;
+
+                    const stopId = stopMatch[1];
+                    const nameEl = item.querySelector('.ott-stopname, .row');
+                    const name = nameEl ? nameEl.textContent.trim() : item.textContent.trim().split('\n')[0];
+
+                    if (name && stopId) {
+                        const isTrain = stopId.toLowerCase().includes(':s:') &&
+                            (name.toLowerCase().includes('station') || stopId.length <= 10);
+                        stops.push({
+                            id: stopId,
+                            name: name.substring(0, 50),
+                            type: isTrain ? 'train' : 'bus',
+                            lat: null,
+                            lon: null
+                        });
+                    }
+                });
+
+                renderSearchResults(stops.slice(0, 8));
+            } catch (e) {
+                console.error('Search failed:', e);
+                resultsContainer.innerHTML = '<div class="search-loading">Zoeken mislukt</div>';
+            }
+        }
+
+        function renderSearchResults(stops) {
+            const container = document.getElementById('searchResults');
+            const favorites = loadFavorites();
+
+            if (stops.length === 0) {
+                container.innerHTML = '<div class="search-loading">Geen haltes gevonden</div>';
+                return;
+            }
+
+            const busIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="3" width="14" height="14" rx="2"/><path d="M5 8h14"/><path d="M8 8v5"/><path d="M16 8v5"/><path d="M7 17l-1.5 3"/><path d="M17 17l1.5 3"/><path d="M3 21h18"/></svg>';
+            const trainIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="3" width="12" height="14" rx="3"/><path d="M6 8h12"/><path d="M9 8v4"/><path d="M15 8v4"/><path d="M10 17l-2 4"/><path d="M14 17l2 4"/><path d="M3 21h18"/></svg>';
+
+            container.innerHTML = stops.map(stop => {
+                const isTrain = stop.type === 'train';
+                const icon = isTrain ? trainIcon : busIcon;
+                const typeLabel = isTrain ? 'Station' : 'Bushalte';
+                const isFavorite = favorites.some(f => f.id === stop.id);
+
+                return `
+                    <div class="search-result-item" onclick="handleSearchResultClick(${JSON.stringify(stop).replace(/"/g, '&quot;')})">
+                        <div class="search-result-icon ${isTrain ? 'train' : ''}">${icon}</div>
+                        <div class="search-result-info">
+                            <div class="search-result-name">${stop.name}</div>
+                            <div class="search-result-type">${typeLabel}${isFavorite ? ' · ★ Favoriet' : ''}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function handleSearchResultClick(stop) {
+            addFavorite(stop);
+            selectStop(stop);
+        }
+
+        // Search input handler with debounce
+        document.addEventListener('DOMContentLoaded', () => {
+            const searchInput = document.getElementById('stopSearchInput');
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    clearTimeout(searchTimeout);
+                    searchTimeout = setTimeout(() => {
+                        searchStops(e.target.value);
+                    }, 300);
+                });
+            }
+
+            // Close modal on Escape
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    const stopModal = document.getElementById('stopModal');
+                    if (stopModal.classList.contains('visible')) {
+                        closeStopSelector();
+                    }
+                }
+            });
+
+            // Close modal on backdrop click
+            const stopModal = document.getElementById('stopModal');
+            if (stopModal) {
+                stopModal.addEventListener('click', (e) => {
+                    if (e.target === stopModal) {
+                        closeStopSelector();
+                    }
+                });
+            }
+        });
+
+        // Initialize stops system
+        initializeStops();
+
+        // ===== END FAVORITES SYSTEM =====
+
+        // Dynamic stop URLs based on current selection
+        function getBusUrl() {
+            if (!currentStop || currentStop.type === 'train') return null;
+            return `https://drgl.nl/stop/${currentStop.id}/departurespanel`;
+        }
+
+        function getTrainUrl() {
+            // Always show train from Vleuten as secondary
+            return `https://drgl.nl/stop/NL:S:vtn/traindeparturespanel`;
+        }
+
+        function getCurrentStopCoords() {
+            if (!currentStop) return null;
+            return { lat: currentStop.lat, lon: currentStop.lon };
+        }
+
+        // Legacy constants for compatibility
         const BUS_STOP_COORDS = {
             'NL:S:51200123': { lat: 52.0839993, lon: 5.0132954 }
         };
-
-        // Trein station Vleuten
-        const TRAIN_STOP_AREA = 'NL:S:vtn';
-        const TRAIN_URL = `https://drgl.nl/stop/${TRAIN_STOP_AREA}/traindeparturespanel`;
 
         const REFRESH_INTERVAL = 15000;
         const POSITION_CACHE_TTL = 30000;
@@ -456,14 +782,28 @@
             const content = document.getElementById('content');
 
             try {
-                // Haal bus en trein data parallel op
-                const [busHtml, trainHtml] = await Promise.all([
-                    fetchDrglData(BUS_URL).catch(() => ''),
-                    fetchDrglData(TRAIN_URL).catch(() => '')
-                ]);
+                const busUrl = getBusUrl();
+                const trainUrl = getTrainUrl();
 
-                const busDepartures = parseDrglHtml(busHtml);
-                const trainDepartures = parseTrainHtml(trainHtml);
+                // Determine what to fetch based on current stop type
+                let busDepartures = [];
+                let trainDepartures = [];
+
+                if (currentStop && currentStop.type === 'train') {
+                    // For train stations, fetch train data from that station
+                    const stationUrl = `https://drgl.nl/stop/${currentStop.id}/traindeparturespanel`;
+                    const trainHtml = await fetchDrglData(stationUrl).catch(() => '');
+                    trainDepartures = parseTrainHtml(trainHtml);
+                } else {
+                    // For bus stops, fetch both bus and train data
+                    const [busHtml, trainHtml] = await Promise.all([
+                        busUrl ? fetchDrglData(busUrl).catch(() => '') : Promise.resolve(''),
+                        fetchDrglData(trainUrl).catch(() => '')
+                    ]);
+
+                    busDepartures = parseDrglHtml(busHtml);
+                    trainDepartures = parseTrainHtml(trainHtml);
+                }
 
                 console.log(`DRGL: ${busDepartures.length} bus departures, ${trainDepartures.length} train departures`);
 
@@ -510,14 +850,21 @@
 
             let html = '';
 
-            // Utrecht direction (bus)
-            html += renderSection('utrecht', 'Bus naar Utrecht', utrechtDepartures, 'bus');
+            // Check if current stop is a train station
+            const isTrainStation = currentStop && currentStop.type === 'train';
 
-            // Vleuten direction (bus)
-            html += renderSection('vleuten', 'Bus naar Vleuten', vleutenDepartures, 'bus');
+            if (isTrainStation) {
+                // Only show train departures for train stations
+                const stationName = currentStop.name.replace(/^Station\s*/i, '');
+                html += renderSection('train', `Trein vanaf ${stationName}`, trainDepartures, 'train');
+            } else {
+                // Show bus departures grouped by direction
+                html += renderSection('utrecht', 'Bus naar Utrecht', utrechtDepartures, 'bus');
+                html += renderSection('vleuten', 'Bus naar Vleuten', vleutenDepartures, 'bus');
 
-            // Treinen vanaf station Vleuten
-            html += renderSection('train', 'Trein vanaf Vleuten', trainDepartures, 'train');
+                // Treinen vanaf station Vleuten
+                html += renderSection('train', 'Trein vanaf Vleuten', trainDepartures, 'train');
+            }
 
             content.innerHTML = html;
 
@@ -811,8 +1158,8 @@
                     }).addTo(liveMap);
                 }
 
-                const stopCoords = BUS_STOP_COORDS[BUS_STOP_AREA];
-                if (stopCoords) {
+                const stopCoords = getCurrentStopCoords() || BUS_STOP_COORDS['NL:S:51200123'];
+                if (stopCoords && stopCoords.lat && stopCoords.lon) {
                     const stopLatLng = [stopCoords.lat, stopCoords.lon];
                     if (liveStopMarker) {
                         liveStopMarker.setLatLng(stopLatLng);
@@ -927,8 +1274,8 @@
             let remainingCoords = liveRouteCoords.slice(currentIndex);
             let stopPassed = false;
 
-            const stopCoords = BUS_STOP_COORDS[BUS_STOP_AREA];
-            if (stopCoords) {
+            const stopCoords = getCurrentStopCoords() || BUS_STOP_COORDS['NL:S:51200123'];
+            if (stopCoords && stopCoords.lat && stopCoords.lon) {
                 const stopIndex = findClosestIndex(liveRouteCoords, [stopCoords.lat, stopCoords.lon]);
                 if (stopIndex >= currentIndex) {
                     remainingCoords = liveRouteCoords.slice(currentIndex, stopIndex + 1);
@@ -988,9 +1335,9 @@
                 liveMap.setView([lat, lon], 15);
                 const stopPassed = updateRemainingRoute(lat, lon);
                 let remainingStops = null;
-                if (liveJourneyRealtime) {
+                if (liveJourneyRealtime && currentStop) {
                     try {
-                        remainingStops = await getRemainingStopsCount(liveJourneyPath, BUS_STOP_AREA);
+                        remainingStops = await getRemainingStopsCount(liveJourneyPath, currentStop.id);
                     } catch (e) {
                         remainingStops = null;
                     }
