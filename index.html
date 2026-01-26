@@ -270,6 +270,26 @@
             document.getElementById('searchResults').innerHTML = '';
         }
 
+        // Detect if a stop is a train station
+        function isTrainStation(stopId, name) {
+            const id = (stopId || '').toLowerCase();
+            const nameLower = (name || '').toLowerCase();
+
+            // Check if name contains train-related keywords
+            if (nameLower.includes('station') || nameLower.includes('centraal')) {
+                return true;
+            }
+
+            // NS station codes are typically short (2-5 chars) in format NL:S:xxx
+            // Examples: NL:S:ut, NL:S:asd, NL:S:vtn, NL:S:ehv, NL:S:rtd
+            const nsMatch = id.match(/^nl:s:([a-z]{2,6})$/);
+            if (nsMatch) {
+                return true;
+            }
+
+            return false;
+        }
+
         function renderFavorites() {
             const container = document.getElementById('favoritesList');
             const favorites = loadFavorites();
@@ -284,7 +304,7 @@
 
             container.innerHTML = favorites.map(stop => {
                 const isActive = currentStop && currentStop.id === stop.id;
-                const isTrain = stop.type === 'train' || stop.id.includes(':S:') && stop.name.toLowerCase().includes('station');
+                const isTrain = stop.type === 'train' || isTrainStation(stop.id, stop.name);
                 const icon = isTrain ? trainIcon : busIcon;
                 const typeLabel = isTrain ? 'Station' : 'Bushalte';
 
@@ -334,8 +354,7 @@
                     const name = nameEl ? nameEl.textContent.trim() : item.textContent.trim().split('\n')[0];
 
                     if (name && stopId) {
-                        const isTrain = stopId.toLowerCase().includes(':s:') &&
-                            (name.toLowerCase().includes('station') || stopId.length <= 10);
+                        const isTrain = isTrainStation(stopId, name);
                         stops.push({
                             id: stopId,
                             name: name.substring(0, 50),
